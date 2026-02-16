@@ -1,6 +1,7 @@
 import os
 import sqlite3
-from datetime import date
+import asyncio
+from datetime import datetime, date
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -16,7 +17,7 @@ from telegram.ext import (
     filters
 )
 
-TOKEN = os.getenv("BOT_TOKEN")  # Обязательно ставим переменную окружения на Render
+TOKEN = os.getenv("BOT_TOKEN")  # В Render: Environment -> BOT_TOKEN
 
 DB_FILE = "habit_bot.db"
 
@@ -29,6 +30,12 @@ def init_db():
             user_id TEXT,
             habit TEXT,
             date TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reminders (
+            user_id TEXT PRIMARY KEY,
+            time TEXT
         )
     """)
     conn.commit()
@@ -89,6 +96,30 @@ def get_stats(user_id):
     conn.close()
     return rows
 
+# ===== Функции работы с напоминаниями =====
+def set_reminder(user_id, time_str):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("REPLACE INTO reminders (user_id, time) VALUES (?, ?)", (user_id, time_str))
+    conn.commit()
+    conn.close()
+
+def get_reminder(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT time FROM reminders WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def get_all_reminders():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, time FROM reminders")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
 # ===== Главное меню =====
 def main_menu():
     keyboard = [
@@ -96,13 +127,15 @@ def main_menu():
         ["📋 Мои привычки"],
         ["✅ Отметить выполнение"],
         ["🗑 Удалить привычку"],
-        ["📊 Статистика"]
+        ["📊 Статистика"],
+        ["⏰ Установить напоминание"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # ===== Старт =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["adding"] = False
+    context.user_data["setting_reminder"] = False
     await update.message.reply_text(
         "Привет! Я твой трекер привычек 💪",
         reply_markup=main_menu()
@@ -169,6 +202,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg)
         return
 
+    # --- Установить напоминание ---
+    if text == "⏰ Установить напоминание":
+        context.user_data["setting_reminder"] = True
+        await update.message.reply_text("Введите время напоминания в формате ЧЧ.MM (например, 20.30):")
+        return
+
+    if context.user_data.get("setting_reminder"):
+        time_str = text.strip()
+        try:
+            h, m = map(int, time_str.split("."))
+            if 0 <= h < 24 and 0 <= m < 60:
+                set_reminder(user_id, time_str)
+                await update.message.reply_text(f"Напоминание установлено на {time_str} ⏰")
+            else:
+                await update.message.reply_text("Неверный формат времени. Попробуйте снова.")
+        except:
+            await update.message.reply_text("Неверный формат времени. Попробуйте снова.")
+        context.user_data["setting_reminder"] = False
+        return
+
 # ===== Обработка inline-кнопок =====
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -185,10 +238,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         delete_habit(user_id, habit)
         await query.edit_message_text(f"{habit} удалена 🗑")
 
+# ===== Напоминания =====
+async def reminder_loop(app):
+    while True:
+        now = datetime.now().strftime("%H.%M")
+        for user_id, time_str in get_all_reminders():
+            if now == time_str:
+                habits = get_habits(user_id)
+                if habits:
+                    msg = "Не забудь выполнить свои привычки:\n" + "\n".join(f"• {h}" for h in habits)
+                    try:
+                        await app.bot.send_message(chat_id=int(user_id), text=msg)
+                    except:
+                        pass
+        await asyncio.sleep(60)  # проверка каждую минуту
+
 # ===== Основной блок =====
 app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.add_handler(CallbackQueryHandler(handle_callback))
 
-app.run_polling()
+# Запускаем напоминания параллельно с ботом
+async def main():
+    asyncio.create_task(reminder_loop(app))
+    await app.run_polling()
+
+if __name__ == "__main__":
+    asyncio.run(main())
