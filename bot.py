@@ -149,17 +149,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- Добавление привычки ---
     if text == "➕ Добавить привычку":
         context.user_data["adding"] = True
-        await update.message.reply_text("Введите название привычки:")
+        await update.message.reply_text("Введите название привычки:", reply_markup=main_menu())
         return
 
     if context.user_data.get("adding"):
         habit = text.strip()
         if add_habit(user_id, habit):
-            await update.message.reply_text(f"'{habit}' добавлено ✅")
+            await update.message.reply_text(f"'{habit}' добавлено ✅", reply_markup=main_menu())
         else:
-            await update.message.reply_text("Такая привычка уже есть.")
+            await update.message.reply_text("Такая привычка уже есть.", reply_markup=main_menu())
         context.user_data["adding"] = False
-        await update.message.reply_text("Меню 👇", reply_markup=main_menu())
         return
 
     # --- Показать привычки ---
@@ -169,14 +168,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = "Твои привычки:\n" + "\n".join(f"• {h}" for h in habits)
         else:
             msg = "У тебя пока нет привычек."
-        await update.message.reply_text(msg)
+        await update.message.reply_text(msg, reply_markup=main_menu())
         return
 
     # --- Отметить выполнение ---
     if text == "✅ Отметить выполнение":
         habits = get_habits(user_id)
         if not habits:
-            await update.message.reply_text("Нет привычек.")
+            await update.message.reply_text("Нет привычек.", reply_markup=main_menu())
             return
         keyboard = [[InlineKeyboardButton(h, callback_data=f"mark|{h}")] for h in habits]
         await update.message.reply_text("Выберите привычку:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -186,7 +185,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🗑 Удалить привычку":
         habits = get_habits(user_id)
         if not habits:
-            await update.message.reply_text("Нет привычек для удаления.")
+            await update.message.reply_text("Нет привычек для удаления.", reply_markup=main_menu())
             return
         keyboard = [[InlineKeyboardButton(h, callback_data=f"delete|{h}")] for h in habits]
         await update.message.reply_text("Выберите привычку для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -199,32 +198,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = "Статистика:\n" + "\n".join(f"{h}: {c} дней" for h, c in stats)
         else:
             msg = "Нет данных."
-        await update.message.reply_text(msg)
+        await update.message.reply_text(msg, reply_markup=main_menu())
         return
 
     # --- Установить напоминание ---
     if text == "⏰ Установить напоминание":
-    context.user_data["setting_reminder"] = True
-    await update.message.reply_text(
-        "Введите время напоминания в формате ЧЧ.MM (например, 20.30):",
-        reply_markup=main_menu()  # <-- Обновляем меню сразу
-    )
-    return
+        context.user_data["setting_reminder"] = True
+        await update.message.reply_text(
+            "Введите время напоминания в формате ЧЧ.MM (например, 20.30):",
+            reply_markup=main_menu()
+        )
+        return
 
-if context.user_data.get("setting_reminder"):
-    time_str = text.strip()
-    try:
-        h, m = map(int, time_str.split("."))
-        if 0 <= h < 24 and 0 <= m < 60:
-            set_reminder(user_id, time_str)
-            await update.message.reply_text(f"Напоминание установлено на {time_str} ⏰", reply_markup=main_menu())
-        else:
+    if context.user_data.get("setting_reminder"):
+        time_str = text.strip()
+        try:
+            h, m = map(int, time_str.split("."))
+            if 0 <= h < 24 and 0 <= m < 60:
+                set_reminder(user_id, time_str)
+                await update.message.reply_text(f"Напоминание установлено на {time_str} ⏰", reply_markup=main_menu())
+            else:
+                await update.message.reply_text("Неверный формат времени. Попробуйте снова.", reply_markup=main_menu())
+        except:
             await update.message.reply_text("Неверный формат времени. Попробуйте снова.", reply_markup=main_menu())
-    except:
-        await update.message.reply_text("Неверный формат времени. Попробуйте снова.", reply_markup=main_menu())
-    context.user_data["setting_reminder"] = False
-    return
-
+        context.user_data["setting_reminder"] = False
+        return
 
 # ===== Обработка inline-кнопок =====
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -255,7 +253,7 @@ async def reminder_loop(app):
                         await app.bot.send_message(chat_id=int(user_id), text=msg)
                     except:
                         pass
-        await asyncio.sleep(60)  # проверка каждую минуту
+        await asyncio.sleep(60)
 
 # ===== Основной блок =====
 app = ApplicationBuilder().token(TOKEN).build()
