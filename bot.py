@@ -204,23 +204,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- Установить напоминание ---
     if text == "⏰ Установить напоминание":
-        context.user_data["setting_reminder"] = True
-        await update.message.reply_text("Введите время напоминания в формате ЧЧ.MM (например, 20.30):")
-        return
+    context.user_data["setting_reminder"] = True
+    await update.message.reply_text(
+        "Введите время напоминания в формате ЧЧ.MM (например, 20.30):",
+        reply_markup=main_menu()  # <-- Обновляем меню сразу
+    )
+    return
 
-    if context.user_data.get("setting_reminder"):
-        time_str = text.strip()
-        try:
-            h, m = map(int, time_str.split("."))
-            if 0 <= h < 24 and 0 <= m < 60:
-                set_reminder(user_id, time_str)
-                await update.message.reply_text(f"Напоминание установлено на {time_str} ⏰")
-            else:
-                await update.message.reply_text("Неверный формат времени. Попробуйте снова.")
-        except:
-            await update.message.reply_text("Неверный формат времени. Попробуйте снова.")
-        context.user_data["setting_reminder"] = False
-        return
+if context.user_data.get("setting_reminder"):
+    time_str = text.strip()
+    try:
+        h, m = map(int, time_str.split("."))
+        if 0 <= h < 24 and 0 <= m < 60:
+            set_reminder(user_id, time_str)
+            await update.message.reply_text(f"Напоминание установлено на {time_str} ⏰", reply_markup=main_menu())
+        else:
+            await update.message.reply_text("Неверный формат времени. Попробуйте снова.", reply_markup=main_menu())
+    except:
+        await update.message.reply_text("Неверный формат времени. Попробуйте снова.", reply_markup=main_menu())
+    context.user_data["setting_reminder"] = False
+    return
+
 
 # ===== Обработка inline-кнопок =====
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
