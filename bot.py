@@ -262,9 +262,8 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.add_handler(CallbackQueryHandler(handle_callback))
 
 # Запускаем напоминания параллельно с ботом
-async def main():
-    asyncio.create_task(reminder_loop(app))
-    await app.run_polling()
+async def on_startup(app):
+    app.create_task(reminder_loop(app))
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    app.run_polling(on_startup=on_startup)
