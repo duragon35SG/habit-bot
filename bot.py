@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import nest_asyncio
 import asyncio
 from datetime import datetime, date
 from telegram import (
@@ -261,9 +262,14 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.add_handler(CallbackQueryHandler(handle_callback))
 
-# Запускаем напоминания параллельно с ботом
-async def on_startup(app):
-    app.create_task(reminder_loop(app))
+# Запуск напоминаний через asyncio.create_task после старта polling
+async def main():
+    asyncio.create_task(reminder_loop(app))
+    await app.run_polling()
 
 if __name__ == "__main__":
-    app.run_polling(on_startup=on_startup)
+    import nest_asyncio
+    nest_asyncio.apply()  # фикс для уже запущенного event loop
+    import asyncio
+    asyncio.run(main())
+
