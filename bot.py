@@ -1,5 +1,5 @@
-import json
 import os
+import sqlite3
 from datetime import date
 from telegram import (
     Update,
@@ -16,25 +16,80 @@ from telegram.ext import (
     filters
 )
 
-TOKEN = "8591958220:AAE3yTUZ7heX9jV-lx61mdG5fZ7c5SRyh8c"
+TOKEN = os.getenv("BOT_TOKEN")  # Обязательно ставим переменную окружения на Render
 
-DATA_FILE = "data.json"
+DB_FILE = "habit_bot.db"
 
-if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "w") as f:
-        json.dump({}, f)
+# ===== Инициализация базы данных =====
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS habits (
+            user_id TEXT,
+            habit TEXT,
+            date TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
+init_db()
 
-def load_data():
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+# ===== Функции работы с привычками =====
+def add_habit(user_id, habit):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM habits WHERE user_id=? AND habit=? AND date IS NULL", (user_id, habit))
+    if cursor.fetchone():
+        conn.close()
+        return False
+    cursor.execute("INSERT INTO habits (user_id, habit, date) VALUES (?, ?, ?)", (user_id, habit, None))
+    conn.commit()
+    conn.close()
+    return True
 
+def delete_habit(user_id, habit):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM habits WHERE user_id=? AND habit=?", (user_id, habit))
+    conn.commit()
+    conn.close()
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+def get_habits(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT habit FROM habits WHERE user_id=?", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
+def mark_habit(user_id, habit):
+    today = str(date.today())
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM habits WHERE user_id=? AND habit=? AND date=?", (user_id, habit, today))
+    if cursor.fetchone():
+        conn.close()
+        return False
+    cursor.execute("INSERT INTO habits (user_id, habit, date) VALUES (?, ?, ?)", (user_id, habit, today))
+    conn.commit()
+    conn.close()
+    return True
 
+def get_stats(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT habit, COUNT(date) FROM habits 
+        WHERE user_id=? AND date IS NOT NULL 
+        GROUP BY habit
+    """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+# ===== Главное меню =====
 def main_menu():
     keyboard = [
         ["➕ Добавить привычку"],
@@ -45,24 +100,20 @@ def main_menu():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-
+# ===== Старт =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["adding"] = False
     await update.message.reply_text(
-        "Трекер привычек готов к работе 💪",
+        "Привет! Я твой трекер привычек 💪",
         reply_markup=main_menu()
     )
 
-
-# ===== ОБРАБОТКА ТЕКСТА =====
+# ===== Обработка текста =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = str(update.message.from_user.id)
-    data = load_data()
 
-    if user_id not in data:
-        data[user_id] = {}
-
-    # --- Добавление ---
+    # --- Добавление привычки ---
     if text == "➕ Добавить привычку":
         context.user_data["adding"] = True
         await update.message.reply_text("Введите название привычки:")
@@ -70,23 +121,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.user_data.get("adding"):
         habit = text.strip()
-        if habit in data[user_id]:
-            await update.message.reply_text("Такая привычка уже есть.")
+        if add_habit(user_id, habit):
+            await update.message.reply_text(f"'{habit}' добавлено ✅")
         else:
-            data[user_id][habit] = []
-            save_data(data)
-            await update.message.reply_text(f"Привычка '{habit}' добавлена!")
+            await update.message.reply_text("Такая привычка уже есть.")
         context.user_data["adding"] = False
         await update.message.reply_text("Меню 👇", reply_markup=main_menu())
         return
 
     # --- Показать привычки ---
     if text == "📋 Мои привычки":
-        habits = data[user_id]
+        habits = get_habits(user_id)
         if habits:
-            msg = "Твои привычки:\n"
-            for habit in habits:
-                msg += f"• {habit}\n"
+            msg = "Твои привычки:\n" + "\n".join(f"• {h}" for h in habits)
         else:
             msg = "У тебя пока нет привычек."
         await update.message.reply_text(msg)
@@ -94,80 +141,52 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- Отметить выполнение ---
     if text == "✅ Отметить выполнение":
-        habits = list(data[user_id].keys())
+        habits = get_habits(user_id)
         if not habits:
             await update.message.reply_text("Нет привычек.")
             return
-
-        keyboard = [
-            [InlineKeyboardButton(h, callback_data=f"mark|{h}")]
-            for h in habits
-        ]
-
-        await update.message.reply_text(
-            "Выберите привычку:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        keyboard = [[InlineKeyboardButton(h, callback_data=f"mark|{h}")] for h in habits]
+        await update.message.reply_text("Выберите привычку:", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     # --- Удалить привычку ---
     if text == "🗑 Удалить привычку":
-        habits = list(data[user_id].keys())
+        habits = get_habits(user_id)
         if not habits:
             await update.message.reply_text("Нет привычек для удаления.")
             return
-
-        keyboard = [
-            [InlineKeyboardButton(h, callback_data=f"delete|{h}")]
-            for h in habits
-        ]
-
-        await update.message.reply_text(
-            "Выберите привычку для удаления:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        keyboard = [[InlineKeyboardButton(h, callback_data=f"delete|{h}")] for h in habits]
+        await update.message.reply_text("Выберите привычку для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     # --- Статистика ---
     if text == "📊 Статистика":
-        habits = data[user_id]
-        if habits:
-            msg = "Статистика:\n"
-            for habit, days in habits.items():
-                msg += f"{habit}: {len(days)} дней\n"
+        stats = get_stats(user_id)
+        if stats:
+            msg = "Статистика:\n" + "\n".join(f"{h}: {c} дней" for h, c in stats)
         else:
             msg = "Нет данных."
         await update.message.reply_text(msg)
+        return
 
-
-# ===== ОБРАБОТКА INLINE-КНОПОК =====
+# ===== Обработка inline-кнопок =====
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     user_id = str(query.from_user.id)
-    data = load_data()
-
     action, habit = query.data.split("|")
 
     if action == "mark":
-        today = str(date.today())
-
-        if today not in data[user_id][habit]:
-            data[user_id][habit].append(today)
-            save_data(data)
+        if mark_habit(user_id, habit):
             await query.edit_message_text(f"{habit} отмечено ✅")
         else:
             await query.edit_message_text("Сегодня уже отмечено 😉")
-
     elif action == "delete":
-        del data[user_id][habit]
-        save_data(data)
+        delete_habit(user_id, habit)
         await query.edit_message_text(f"{habit} удалена 🗑")
 
-
+# ===== Основной блок =====
 app = ApplicationBuilder().token(TOKEN).build()
-
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.add_handler(CallbackQueryHandler(handle_callback))
